@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
 
 def _csv_to_ints(raw_value: str) -> tuple[int, ...]:
     values = []
@@ -33,7 +35,32 @@ class Settings:
         return self.max_file_size_mb * 1024 * 1024
 
 
+def _load_env_file(env_file: Path | None = None) -> None:
+    env_file = env_file or DEFAULT_ENV_FILE
+
+    if not env_file.is_file():
+        return
+
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.removeprefix("export ").strip()
+        if not key or key in os.environ:
+            continue
+
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+
+        os.environ[key] = value
+
+
 def load_settings() -> Settings:
+    _load_env_file()
+
     bot_token = os.getenv("BOT_TOKEN", "").strip()
     if not bot_token:
         raise ValueError("BOT_TOKEN is required")
@@ -56,4 +83,3 @@ def load_settings() -> Settings:
         log_retention_limit=int(os.getenv("LOG_RETENTION_LIMIT", "10000")),
         stale_file_max_age_hours=int(os.getenv("STALE_FILE_MAX_AGE_HOURS", "24")),
     )
-
