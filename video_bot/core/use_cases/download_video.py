@@ -33,6 +33,7 @@ class DownloadVideoUseCase:
                     file_size_bytes=file_size,
                     error_message="Размер файла превышает лимит Telegram Bot API.",
                 )
+                await self._file_storage.remove_file(video.file_path)
                 raise FileTooLargeError("Видео превышает лимит Telegram и не может быть отправлено.")
 
             await self._log_repository.mark_success(log_id, file_size_bytes=file_size)
@@ -50,4 +51,3 @@ class DownloadVideoUseCase:
                 await self._log_repository.mark_failure(log_id, error_message=str(exc))
             await self._log_repository.trim_to_limit(self._log_retention_limit)
             raise
-
