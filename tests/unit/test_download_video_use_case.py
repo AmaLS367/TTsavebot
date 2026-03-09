@@ -5,11 +5,12 @@ import pytest
 
 from video_bot.core.entities import DownloadedVideo, PlatformType
 from video_bot.core.errors import DownloadTimeoutError, FileTooLargeError
+from video_bot.core.interfaces import DownloadLogRecord, DownloadStats, IDownloadLogRepository, IFileStorage, IVideoDownloaderService
 from video_bot.core.use_cases import DownloadVideoUseCase
 
 
 @dataclass
-class FakeDownloader:
+class FakeDownloader(IVideoDownloaderService):
     result: DownloadedVideo | None = None
     error: Exception | None = None
 
@@ -22,7 +23,7 @@ class FakeDownloader:
 
 
 @dataclass
-class FakeFileStorage:
+class FakeFileStorage(IFileStorage):
     sizes: dict[Path, int]
     removed: list[Path] = field(default_factory=list)
 
@@ -40,7 +41,7 @@ class FakeFileStorage:
 
 
 @dataclass
-class FakeLogRepository:
+class FakeLogRepository(IDownloadLogRepository):
     created_logs: list[tuple[int, str, PlatformType | None]] = field(default_factory=list)
     success: list[tuple[int, int]] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
@@ -64,11 +65,11 @@ class FakeLogRepository:
     async def mark_oversize(self, log_id: int, file_size_bytes: int, error_message: str) -> None:
         self.oversize.append((log_id, file_size_bytes, error_message))
 
-    async def get_recent(self, limit: int):
+    async def get_recent(self, limit: int) -> list[DownloadLogRecord]:
         return []
 
-    async def get_stats(self):
-        return None
+    async def get_stats(self) -> DownloadStats:
+        return DownloadStats(total=0, success=0, failed=0, rejected=0, oversize=0, tiktok=0, instagram=0)
 
     async def trim_to_limit(self, limit: int) -> None:
         self.trimmed.append(limit)
@@ -143,4 +144,3 @@ async def test_download_video_use_case_marks_failure_on_downloader_error() -> No
 
     assert log_repository.failed == [(1, "timeout")]
     assert log_repository.trimmed == [50]
-

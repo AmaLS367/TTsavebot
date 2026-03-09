@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import Protocol, cast
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -9,8 +11,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from video_bot.containers import AppContainer
-from video_bot.core.entities import User
 from video_bot.core.errors import ValidationError
+from video_bot.core.interfaces import DownloadLogRecord, DownloadStats
 from video_bot.presentation.keyboards.admin_panel import build_admin_panel_keyboard, build_whitelist_keyboard
 
 router = Router(name="admin")
@@ -26,6 +28,16 @@ class ParsedTelegramID:
     telegram_id: int
 
 
+class EditableCallbackMessage(Protocol):
+    def edit_text(self, text: str, **kwargs: object) -> Awaitable[object]:
+        ...
+
+
+class AnswerableCallbackMessage(Protocol):
+    def answer(self, text: str, **kwargs: object) -> Awaitable[object]:
+        ...
+
+
 def _parse_telegram_id(raw_value: str) -> ParsedTelegramID:
     value = raw_value.strip()
     if not value:
@@ -36,7 +48,7 @@ def _parse_telegram_id(raw_value: str) -> ParsedTelegramID:
         raise ValidationError("Telegram ID должен быть числом.") from exc
 
 
-def _format_stats(app_stats: object) -> str:
+def _format_stats(app_stats: DownloadStats) -> str:
     return (
         "Статистика:\n"
         f"Всего запросов: {app_stats.total}\n"
@@ -49,9 +61,10 @@ def _format_stats(app_stats: object) -> str:
     )
 
 
-def _format_logs(logs: list[object]) -> str:
+def _format_logs(logs: Sequence[DownloadLogRecord]) -> str:
     if not logs:
         return "Логи пока пусты."
+
     lines = []
     for item in logs:
         lines.append(
@@ -59,6 +72,39 @@ def _format_logs(logs: list[object]) -> str:
             f"{item.platform.value if item.platform else 'n/a'} | {item.url}"
         )
     return "\n".join(lines)
+
+
+def _get_callback_message(callback: CallbackQuery, attribute_name: str) -> object | None:
+    message = callback.message
+    if message is None or not hasattr(message, attribute_name):
+        return None
+    return message
+
+
+async def _edit_callback_message(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup_factory: Callable[[], object],
+) -> bool:
+    message = _get_callback_message(callback, "edit_text")
+    if message is None:
+        await callback.answer("Message is unavailable.", show_alert=True)
+        return False
+
+    editable_message = cast(EditableCallbackMessage, message)
+    await editable_message.edit_text(text, reply_markup=reply_markup_factory())
+    return True
+
+
+async def _answer_callback_message(callback: CallbackQuery, text: str) -> bool:
+    message = _get_callback_message(callback, "answer")
+    if message is None:
+        await callback.answer("Message is unavailable.", show_alert=True)
+        return False
+
+    answerable_message = cast(AnswerableCallbackMessage, message)
+    await answerable_message.answer(text)
+    return True
 
 
 @router.message(Command("panel"))
@@ -81,7 +127,7 @@ async def logs_handler(message: Message, app_container: AppContainer) -> None:
 @router.message(Command("allow"))
 async def allow_handler(message: Message, app_container: AppContainer) -> None:
     try:
-        raw_args = message.text.partition(" ")[2]
+        raw_args = (message.text or "").partition(" ")[2]
         target = _parse_telegram_id(raw_args)
         user = await app_container.admin_allow_user_use_case.execute(target.telegram_id)
         await message.answer(f"Пользователь {user.telegram_id} добавлен в whitelist.")
@@ -92,7 +138,7 @@ async def allow_handler(message: Message, app_container: AppContainer) -> None:
 @router.message(Command("deny"))
 async def deny_handler(message: Message, app_container: AppContainer) -> None:
     try:
-        raw_args = message.text.partition(" ")[2]
+        raw_args = (message.text or "").partition(" ")[2]
         target = _parse_telegram_id(raw_args)
         await app_container.admin_deny_user_use_case.execute(target.telegram_id)
         await message.answer(f"Пользователь {target.telegram_id} удалён из whitelist.")
@@ -103,40 +149,52 @@ async def deny_handler(message: Message, app_container: AppContainer) -> None:
 @router.callback_query(F.data == "panel:stats")
 async def panel_stats_handler(callback: CallbackQuery, app_container: AppContainer) -> None:
     stats = await app_container.admin_get_stats_use_case.execute()
-    await callback.message.edit_text(_format_stats(stats), reply_markup=build_admin_panel_keyboard())
+    if not await _edit_callback_message(callback, _format_stats(stats), build_admin_panel_keyboard):
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:logs")
 async def panel_logs_handler(callback: CallbackQuery, app_container: AppContainer) -> None:
     logs = await app_container.admin_get_logs_use_case.execute(limit=10)
-    await callback.message.edit_text(_format_logs(logs), reply_markup=build_admin_panel_keyboard())
+    if not await _edit_callback_message(callback, _format_logs(logs), build_admin_panel_keyboard):
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:whitelist")
 async def panel_whitelist_handler(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("Управление whitelist", reply_markup=build_whitelist_keyboard())
+    if not await _edit_callback_message(callback, "Управление whitelist", build_whitelist_keyboard):
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:back")
 async def panel_back_handler(callback: CallbackQuery) -> None:
-    await callback.message.edit_text("Админ-панель", reply_markup=build_admin_panel_keyboard())
+    if not await _edit_callback_message(callback, "Админ-панель", build_admin_panel_keyboard):
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:allow")
 async def panel_allow_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(WhitelistStates.waiting_for_allow_id)
-    await callback.message.answer("Отправьте Telegram ID, который нужно добавить в whitelist.")
+    if not await _answer_callback_message(
+        callback,
+        "Отправьте Telegram ID, который нужно добавить в whitelist.",
+    ):
+        return
     await callback.answer()
 
 
 @router.callback_query(F.data == "panel:deny")
 async def panel_deny_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(WhitelistStates.waiting_for_deny_id)
-    await callback.message.answer("Отправьте Telegram ID, который нужно удалить из whitelist.")
+    if not await _answer_callback_message(
+        callback,
+        "Отправьте Telegram ID, который нужно удалить из whitelist.",
+    ):
+        return
     await callback.answer()
 
 
@@ -147,7 +205,9 @@ async def panel_users_handler(callback: CallbackQuery, app_container: AppContain
         text = "Whitelist пуст."
     else:
         text = "\n".join(f"{user.telegram_id} | {user.role.value}" for user in users)
-    await callback.message.answer(text)
+
+    if not await _answer_callback_message(callback, text):
+        return
     await callback.answer()
 
 

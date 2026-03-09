@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import aiosqlite
+
 from video_bot.core.entities import DownloadStatus, PlatformType
 from video_bot.core.interfaces import DownloadLogRecord, DownloadStats, IDownloadLogRepository
 from video_bot.infrastructure.database.sqlite import SQLiteDatabase
@@ -11,16 +13,21 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def _parse_record(row: dict) -> DownloadLogRecord:
+def _row_int(row: aiosqlite.Row, key: str) -> int:
+    value = row[key]
+    return int(value) if value is not None else 0
+
+
+def _parse_record(row: aiosqlite.Row) -> DownloadLogRecord:
     platform = PlatformType(row["platform"]) if row["platform"] else None
     return DownloadLogRecord(
-        id=row["id"],
-        telegram_id=row["telegram_id"],
+        id=_row_int(row, "id"),
+        telegram_id=_row_int(row, "telegram_id"),
         url=row["url"],
         platform=platform,
         status=DownloadStatus(row["status"]),
         error_message=row["error_message"],
-        file_size_bytes=row["file_size_bytes"],
+        file_size_bytes=int(row["file_size_bytes"]) if row["file_size_bytes"] is not None else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
     )
@@ -40,7 +47,10 @@ class SQLiteDownloadLogRepository(IDownloadLogRepository):
                 (telegram_id, url, platform.value if platform else None, DownloadStatus.PENDING.value, _now_iso()),
             )
             await connection.commit()
-            return int(cursor.lastrowid)
+            lastrowid = cursor.lastrowid
+            if lastrowid is None:
+                raise RuntimeError("Insert did not produce a row id")
+            return int(lastrowid)
 
     async def mark_success(self, log_id: int, file_size_bytes: int) -> None:
         await self._mark(log_id, DownloadStatus.SUCCESS, file_size_bytes=file_size_bytes)
@@ -84,14 +94,16 @@ class SQLiteDownloadLogRepository(IDownloadLogRepository):
                 """
             )
             row = await cursor.fetchone()
+            if row is None:
+                return DownloadStats(total=0, success=0, failed=0, rejected=0, oversize=0, tiktok=0, instagram=0)
             return DownloadStats(
-                total=row["total"] or 0,
-                success=row["success"] or 0,
-                failed=row["failed"] or 0,
-                rejected=row["rejected"] or 0,
-                oversize=row["oversize"] or 0,
-                tiktok=row["tiktok"] or 0,
-                instagram=row["instagram"] or 0,
+                total=_row_int(row, "total"),
+                success=_row_int(row, "success"),
+                failed=_row_int(row, "failed"),
+                rejected=_row_int(row, "rejected"),
+                oversize=_row_int(row, "oversize"),
+                tiktok=_row_int(row, "tiktok"),
+                instagram=_row_int(row, "instagram"),
             )
 
     async def trim_to_limit(self, limit: int) -> None:

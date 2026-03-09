@@ -3,12 +3,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from aiogram.types import TelegramObject
 
 from video_bot.core.entities import DownloadedVideo, PlatformType, User, UserRole
 from video_bot.core.errors import FileTooLargeError
-from video_bot.core.interfaces import DownloadStats
+from video_bot.core.interfaces import DownloadLogRecord, DownloadStats, IDownloadLogRepository
+from video_bot.containers import AppContainer
 from video_bot.presentation.handlers.admin import panel_stats_handler
 from video_bot.presentation.handlers.downloads import download_handler
 from video_bot.presentation.middlewares.auth import AuthMiddleware
@@ -44,17 +47,32 @@ class FakeMessage:
 
 
 @dataclass
-class FakeLogRepository:
-    created: list[tuple[int, str, object]] = field(default_factory=list)
+class FakeLogRepository(IDownloadLogRepository):
+    created: list[tuple[int, str, PlatformType | None]] = field(default_factory=list)
     rejected: list[tuple[int, str]] = field(default_factory=list)
     trimmed: list[int] = field(default_factory=list)
 
-    async def create_log(self, telegram_id: int, url: str, platform: object) -> int:
+    async def create_log(self, telegram_id: int, url: str, platform: PlatformType | None) -> int:
         self.created.append((telegram_id, url, platform))
         return 1
 
+    async def mark_success(self, log_id: int, file_size_bytes: int) -> None:
+        return None
+
+    async def mark_failure(self, log_id: int, error_message: str) -> None:
+        return None
+
     async def mark_rejected(self, log_id: int, error_message: str) -> None:
         self.rejected.append((log_id, error_message))
+
+    async def mark_oversize(self, log_id: int, file_size_bytes: int, error_message: str) -> None:
+        return None
+
+    async def get_recent(self, limit: int) -> list[DownloadLogRecord]:
+        return []
+
+    async def get_stats(self) -> DownloadStats:
+        return DownloadStats(total=0, success=0, failed=0, rejected=0, oversize=0, tiktok=0, instagram=0)
 
     async def trim_to_limit(self, limit: int) -> None:
         self.trimmed.append(limit)
@@ -69,7 +87,7 @@ async def test_auth_middleware_denies_unknown_user() -> None:
         download_log_repository=log_repository,
         settings=SimpleNamespace(log_retention_limit=10),
     )
-    middleware = AuthMiddleware(container)
+    middleware = AuthMiddleware(cast(AppContainer, container))
     handler_called = False
 
     async def fake_execute(_: int):
@@ -81,7 +99,7 @@ async def test_auth_middleware_denies_unknown_user() -> None:
         nonlocal handler_called
         handler_called = True
 
-    await middleware(handler, event, {})
+    await middleware(handler, cast(TelegramObject, event), {})
 
     assert handler_called is False
     assert event.answers == ["Доступ запрещён."]

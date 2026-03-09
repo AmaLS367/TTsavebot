@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,7 +12,7 @@ class SQLiteDatabase:
         self._db_path = db_path
 
     @asynccontextmanager
-    async def connect(self) -> aiosqlite.Connection:
+    async def connect(self) -> AsyncIterator[aiosqlite.Connection]:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = await aiosqlite.connect(self._db_path)
         connection.row_factory = aiosqlite.Row

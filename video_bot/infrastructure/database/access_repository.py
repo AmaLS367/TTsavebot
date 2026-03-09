@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import aiosqlite
+
 from video_bot.core.entities import User, UserRole
 from video_bot.core.interfaces import IAccessRepository
 from video_bot.infrastructure.database.sqlite import SQLiteDatabase
@@ -11,7 +13,7 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def _parse_user(row: dict) -> User:
+def _parse_user(row: aiosqlite.Row) -> User:
     return User(
         telegram_id=row["telegram_id"],
         role=UserRole(row["role"]),
