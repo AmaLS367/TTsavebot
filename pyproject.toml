@@ -19,8 +19,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "mypy>=1.13,<2.0",
   "pytest>=8.3,<9.0",
   "pytest-asyncio>=0.25,<1.0",
+  "ruff>=0.9,<1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -30,3 +32,9 @@ packages = ["video_bot"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.mypy]
+python_version = "3.11"
+files = ["main.py", "video_bot", "tests"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
